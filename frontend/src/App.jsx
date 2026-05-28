@@ -347,16 +347,6 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 48 48" fill="none">
-              <path
-                d="M10 18L24 9l14 9v12L24 39 10 30V18Z"
-                stroke="currentColor"
-                strokeWidth="2.5"
-              />
-              <path d="M16 21l8 5 8-5" stroke="currentColor" strokeWidth="2.5" />
-            </svg>
-          </div>
           <div>
             <p className="eyebrow">DEX-NFT Pawning</p>
             <h1>PawnDEX</h1>
