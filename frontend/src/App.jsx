@@ -76,6 +76,7 @@ export default function App() {
   const [interestBps, setInterestBps] = useState("0");
   const [earlyFeeBps, setEarlyFeeBps] = useState("0");
   const [nftSaleFeeBps, setNftSaleFeeBps] = useState("0");
+  const [pendingEth, setPendingEth] = useState("0");
 
   const [buyEthAmount, setBuyEthAmount] = useState("");
   const [sellDexAmount, setSellDexAmount] = useState("");
@@ -177,12 +178,12 @@ export default function App() {
   }, []);
 
  useEffect(() => {
-    async function load() {
-      if (!provider || !wallet) return;
-      await refreshData();
-    }
+	async function load() {
+	  if (!provider || !wallet) return;
+	  await refreshData();
+	}
 
-    load();
+	load();
   }, [provider, wallet, contracts]);
 
   async function connectWallet() {
@@ -235,7 +236,7 @@ export default function App() {
 		  cycle,
 		  interest,
 		  earlyFee,
-		  saleFee,
+		  pending,
 		] = await Promise.all([
 		  provider.getBalance(wallet),
 		  contracts.dexRead.balanceOf(wallet),
@@ -246,7 +247,7 @@ export default function App() {
 		  contracts.marketRead.paymentCycle(),
 		  contracts.marketRead.dexLoanInterestBps(),
 		  contracts.marketRead.earlyCloseFeeBps(),
-		  contracts.marketRead.nftSaleFeeBps(),
+		  contracts.marketRead.pendingETHWithdrawals(wallet),
 		]);
 
 	  setNftSaleFeeBps(saleFee.toString());
@@ -259,6 +260,7 @@ export default function App() {
       setPaymentCycle(cycle.toString());
       setInterestBps(interest.toString());
       setEarlyFeeBps(earlyFee.toString());
+	  setPendingEth(pending.toString());
 
       try {
         const approved = await contracts.nftRead.isApprovedForAll(wallet, MARKET);
@@ -401,24 +403,28 @@ export default function App() {
           </div>
         </header>
 
-        <section className="stats-grid">
-          <article className="stat-card">
-            <span className="label">ETH balance</span>
-            <strong>{formatEth(ethBalance)} ETH</strong>
-          </article>
-          <article className="stat-card">
-            <span className="label">DEX balance</span>
-            <strong>{formatDex(dexBalance)} DEX</strong>
-          </article>
-          <article className="stat-card">
-            <span className="label">Owned NFTs</span>
-            <strong>{nftCount}</strong>
-          </article>
-          <article className="stat-card">
-            <span className="label">Next token ID</span>
-            <strong>#{nextTokenId}</strong>
-          </article>
-        </section>
+		  <section className="stats-grid">
+			<article className="stat-card">
+			  <span className="label">ETH balance</span>
+			  <strong>{formatEth(ethBalance)} ETH</strong>
+			</article>
+			<article className="stat-card">
+			  <span className="label">DEX balance</span>
+			  <strong>{formatDex(dexBalance)} DEX</strong>
+			</article>
+			<article className="stat-card">
+			  <span className="label">Owned NFTs</span>
+			  <strong>{nftCount}</strong>
+			</article>
+			<article className="stat-card">
+			  <span className="label">Next token ID</span>
+			  <strong>{nextTokenId}</strong>
+			</article>
+			<article className="stat-card">
+			  <span className="label">Pending ETH withdrawals</span>
+			  <strong>{formatEth(pendingEth)} ETH</strong>
+			</article>
+		  </section>
 
         <section className="status-bar">
           <span className={`status-dot ${loading ? "is-loading" : "is-ready"}`} />
@@ -831,75 +837,65 @@ export default function App() {
 
         {activeTab === "auctions" && (
           <section className="panel-grid">
-            <article className="card">
-			  <div className="card-head">
-				<h3>Start auction</h3>
-			  </div>
-			  <p className="muted">
-				Auctions in this version accept ETH bids only.
-			  </p>
-			  <div className="form-grid">
-				<div className="field">
-				  <label>Token ID</label>
-				  <input
-					value={auctionTokenId}
-					onChange={(e) => setAuctionTokenId(e.target.value)}
-					placeholder="0"
-				  />
-				</div>
-				<div className="field">
-				  <label>Min price (ETH)</label>
-				  <input
-					value={auctionMinPrice}
-					onChange={(e) => setAuctionMinPrice(e.target.value)}
-					placeholder="0.5"
-				  />
-				</div>
-				<div className="field">
-				  <label>Duration (sec)</label>
-				  <input
-					value={auctionDuration}
-					onChange={(e) => setAuctionDuration(e.target.value)}
-					placeholder="3600"
-				  />
-				</div>
-			  </div>
-			  <button
-				className="primary-btn full"
-				disabled={
-				  !contracts.marketWrite ||
-				  !auctionTokenId ||
-				  !auctionMinPrice ||
-				  !auctionDuration ||
-				  loading
-				}
-				onClick={() => {
-				  const tokenId = safeNumber(auctionTokenId);
-				  const duration = safeNumber(auctionDuration);
-				  const parsedMin = safeParseEth(auctionMinPrice);
-
-				  if (tokenId === null) {
-					setStatus("Enter a valid token ID.");
-					return;
-				  }
-				  if (duration === null) {
-					setStatus("Enter a valid auction duration.");
-					return;
-				  }
-				  if (!parsedMin) {
-					setStatus("Enter a valid ETH minimum price.");
-					return;
-				  }
-
-				  runTx(
-					() => contracts.marketWrite.startAuction(NFT, tokenId, parsedMin, false, duration),
-					"Auction started successfully."
-				  );
-				}}
-			  >
-				Start auction
-			  </button>
-			</article>
+                  <article className="card">
+					<div className="card-head">
+					  <h3>Start auction</h3>
+					</div>
+					<div className="form-grid">
+					  <div className="field">
+						<label>Token ID</label>
+						<input
+						  value={auctionTokenId}
+						  onChange={(e) => setAuctionTokenId(e.target.value)}
+						  placeholder="0"
+						/>
+					  </div>
+					  <div className="field">
+						<label>Min price (ETH)</label>
+						<input
+						  value={auctionMinPrice}
+						  onChange={(e) => setAuctionMinPrice(e.target.value)}
+						  placeholder="0.5"
+						/>
+					  </div>
+					  <div className="field">
+						<label>Duration (sec)</label>
+						<input
+						  value={auctionDuration}
+						  onChange={(e) => setAuctionDuration(e.target.value)}
+						  placeholder="3600"
+						/>
+					  </div>
+					</div>
+					<p className="muted">
+					  Auctions accept ETH bids only; DEX bids are disabled in this version.
+					</p>
+					<button
+					  className="primary-btn full"
+					  disabled={
+						!contracts.marketWrite ||
+						!auctionTokenId ||
+						!auctionMinPrice ||
+						!auctionDuration ||
+						loading
+					  }
+					  onClick={() =>
+						runTx(
+						  () =>
+							contracts.marketWrite.startAuction(
+							  NFT,
+							  auctionTokenId,
+							  ethers.parseEther(auctionMinPrice),
+							  false, // inDEX = false, ETH-only
+							  auctionDuration
+							),
+						  "Auction started successfully."
+						)
+					  }
+					>
+					  Start auction
+					</button>
+				  </article>
 
             <article className="card">
               <div className="card-head">
@@ -973,26 +969,14 @@ export default function App() {
 				  <span>Seller</span>
 				  <strong>{shortAddress(auctionInfo.seller)}</strong>
 				</div>
-				<div>
-				  <span>Min price</span>
-				  <strong>
-					{auctionInfo.minPrice
-					  ? auctionInfo.inDEX
-						? `${formatDex(auctionInfo.minPrice)} DEX`
-						: `${formatEth(auctionInfo.minPrice)} ETH`
-					  : "0"}
-				  </strong>
-				</div>
-				<div>
-				  <span>Highest bid</span>
-				  <strong>
-					{auctionInfo.highestBid
-					  ? auctionInfo.inDEX
-						? `${formatDex(auctionInfo.highestBid)} DEX`
-						: `${formatEth(auctionInfo.highestBid)} ETH`
-					  : "0"}
-				  </strong>
-				</div>
+					<div>
+					  <span>Min price</span>
+					  <strong>{auctionInfo.minPrice ? `${formatEth(auctionInfo.minPrice)} ETH` : "0"}</strong>
+					</div>
+					<div>
+					  <span>Highest bid</span>
+					  <strong>{auctionInfo.highestBid ? `${formatEth(auctionInfo.highestBid)} ETH` : "0"}</strong>
+					</div>
 				<div>
 				  <span>Highest bidder</span>
 				  <strong>
@@ -1088,9 +1072,10 @@ export default function App() {
               <div className="card-head">
                 <h3>Request NFT loan</h3>
               </div>
-			  <p className="muted">
-					For NFT-backed loans, the lender receives half of the interest on repayment. If the borrower defaults, the NFT is transferred to the DApp owner.
-			  </p>
+				<p className="muted">
+				  For NFT-backed loans, the lender receives half of the interest on repayment.
+				  If the borrower defaults, the lender can claim the NFT collateral.
+				</p>
               <div className="form-grid">
                 <div className="field">
                   <label>Token ID</label>
@@ -1288,6 +1273,32 @@ export default function App() {
                 Claim NFT default
               </button>
             </article>
+			
+			          <article className="card">
+            <div className="card-head">
+              <h3>Withdraw pending ETH</h3>
+            </div>
+            <p className="muted">
+              Any ETH from sales, loans or auctions accumulates as pending balance.
+              Withdraw it to your wallet.
+            </p>
+            <p className="field">
+              <span className="label">Pending amount</span>
+              <strong>{formatEth(pendingEth)} ETH</strong>
+            </p>
+            <button
+              className="primary-btn full"
+              disabled={!contracts.marketWrite || loading || pendingEth === "0"}
+              onClick={() =>
+                runTx(
+                  () => contracts.marketWrite.withdrawETH(),
+                  "Pending ETH withdrawn."
+                )
+              }
+            >
+              Withdraw ETH
+            </button>
+          </article>
           </section>
         )}
       </main>
