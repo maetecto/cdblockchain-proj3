@@ -105,8 +105,10 @@ describe("DEX Loans", function () {
     const updated = await market.dexLoans(borrower.address);
 
     expect(updated.active).to.equal(false);
-    expect(await dex.balanceOf(borrower.address))
-      .to.equal(ethers.parseEther("100"));
+
+    // Borrower volta a ter os 1000 DEX que comprou inicialmente
+    const dexBalance = await dex.balanceOf(borrower.address);
+    expect(dexBalance).to.equal(ethers.parseEther("1000"));
   });
 
   it("Cria NFT loan", async function () {
@@ -158,9 +160,12 @@ describe("DEX Loans", function () {
   it("Default transfere NFT para o owner do dapp", async function () {
     await createFundedNftLoan(1);
 
-    const connection = await hre.network.connect();
-    await connection.provider.send("evm_increaseTime", [2]);
-    await connection.provider.send("evm_mine", []);
+    // Ler o loan para usar a duration correta
+    const loan = await market.nftLoans(0);
+    const increase = Number(loan.duration) + 1;
+
+    await ethers.provider.send("evm_increaseTime", [increase]);
+    await ethers.provider.send("evm_mine", []);
 
     await market.connect(lender).claimNFTDefault(0);
 
