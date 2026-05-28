@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
+
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "./interfaces/IDEXToken.sol";
+import "./interfaces/IPawNFT.sol";
+
 struct Listing {
     address seller;
     address nftContract;
@@ -37,17 +42,15 @@ struct NftLoanRequest {
     uint256 requestedETH;
     uint256 interestRateBps;
     uint256 duration;
+    uint256 fundedAt;
+    uint256 deadline;
     address lender;
     uint256 lenderDEXLocked;
     bool funded;
     bool active;
 }
 
-import "./interfaces/IDEXToken.sol";
-import "./interfaces/IPawNFT.sol";
-
-contract DEXNFTMarket {
-
+contract DEXNFTMarket is ReentrancyGuard {
     IDEXToken public dex;
     IPawNFT public pawNFT;
 
@@ -56,131 +59,68 @@ contract DEXNFTMarket {
     uint256 public dexLoanInterestBps;
     uint256 public earlyCloseFeeBps;
     uint256 public paymentCycle;
+    uint256 public nftSaleFeeBps;
 
-    mapping(uint256 => Listing)
-        public listings;
+    mapping(uint256 => Listing) public listings;
+    mapping(uint256 => Auction) public auctions;
+    mapping(address => DexLoan) public dexLoans;
+    mapping(uint256 => NftLoanRequest) public nftLoans;
+    mapping(address => uint256) public pendingETHWithdrawals;
 
-    mapping(uint256 => Auction)
-        public auctions;
-
-    mapping(address => DexLoan)
-        public dexLoans;
-
-    mapping(uint256 => NftLoanRequest)
-        public nftLoans;
-
-    event NFTListed(
-        uint256 indexed tokenId,
-        address indexed seller,
-        uint256 price
-    );
-
-    event NFTSold(
-        uint256 indexed tokenId,
-        address indexed buyer
-    );
-
-    event AuctionStarted(
-        uint256 indexed tokenId
-    );
-
-    event BidPlaced(
-        uint256 indexed tokenId,
-        address indexed bidder,
-        uint256 amount
-    );
-
-    event AuctionEnded(
-        uint256 indexed tokenId,
-        address winner
-    );
-
-    event DexLoanOpened(
-        address indexed borrower,
-        uint256 collateral,
-        uint256 borrowedETH
-    );
-
-    event DexLoanClosed(
-        address indexed borrower
-    );
-
-    event NFTLoanRequested(
-        uint256 indexed tokenId,
-        uint256 requestedETH
-    );
-
-    event NFTLoanFunded(
-        uint256 indexed tokenId,
-        address lender
-    );
+    event NFTListed(uint256 indexed tokenId, address indexed seller, uint256 price);
+    event NFTSold(uint256 indexed tokenId, address indexed buyer);
+    event AuctionStarted(uint256 indexed tokenId);
+    event BidPlaced(uint256 indexed tokenId, address indexed bidder, uint256 amount);
+    event AuctionEnded(uint256 indexed tokenId, address winner);
+    event DexLoanOpened(address indexed borrower, uint256 collateral, uint256 borrowedETH);
+    event DexLoanClosed(address indexed borrower);
+    event NFTLoanRequested(uint256 indexed tokenId, uint256 requestedETH);
+    event NFTLoanFunded(uint256 indexed tokenId, address lender);
+    event PendingWithdrawalAdded(address indexed user, uint256 amount);
+    event ETHWithdrawn(address indexed user, uint256 amount);
 
     modifier onlyOwner() {
-
-        require(
-            msg.sender == owner,
-            "Not owner"
-        );
-
+        require(msg.sender == owner, "Not owner");
         _;
     }
 
-    constructor(
-        address dexAddress,
-        address nftAddress
-    ) {
+    constructor(address dexAddress, address nftAddress) {
+        owner = msg.sender;
+        dex = IDEXToken(dexAddress);
+        pawNFT = IPawNFT(nftAddress);
 
-        owner =
-            msg.sender;
-
-        dex =
-            IDEXToken(
-                dexAddress
-            );
-
-        pawNFT =
-            IPawNFT(
-                nftAddress
-            );
-
-        dexLoanInterestBps =
-            500;
-
-        earlyCloseFeeBps =
-            300;
-
-        paymentCycle =
-            30 days;
+        dexLoanInterestBps = 500;
+        earlyCloseFeeBps = 300;
+        paymentCycle = 30 days;
+        nftSaleFeeBps = 500;
     }
 
-    function setInterest(
-        uint256 newRate
-    )
-        external
-        onlyOwner
-    {
-        dexLoanInterestBps =
-            newRate;
+    function setInterest(uint256 newRate) external onlyOwner {
+        dexLoanInterestBps = newRate;
     }
 
-    function setEarlyFee(
-        uint256 newFee
-    )
-        external
-        onlyOwner
-    {
-        earlyCloseFeeBps =
-            newFee;
+    function setEarlyFee(uint256 newFee) external onlyOwner {
+        earlyCloseFeeBps = newFee;
     }
 
-    function setPaymentCycle(
-        uint256 newCycle
-    )
-        external
-        onlyOwner
-    {
-        paymentCycle =
-            newCycle;
+    function setPaymentCycle(uint256 newCycle) external onlyOwner {
+        paymentCycle = newCycle;
+    }
+
+    function setNFTSaleFee(uint256 newFee) external onlyOwner {
+        nftSaleFeeBps = newFee;
+    }
+
+    function withdrawETH() external nonReentrant {
+        uint256 amount = pendingETHWithdrawals[msg.sender];
+        require(amount > 0, "No pending ETH");
+
+        pendingETHWithdrawals[msg.sender] = 0;
+
+        (bool sent, ) = payable(msg.sender).call{value: amount}("");
+        require(sent, "ETH withdraw failed");
+
+        emit ETHWithdrawn(msg.sender, amount);
     }
 
     function listNFT(
@@ -188,157 +128,61 @@ contract DEXNFTMarket {
         uint256 tokenId,
         uint256 price,
         bool inDEX
-    )
-        external
-    {
-        require(
-            price > 0,
-            "Invalid price"
-        );
+    ) external nonReentrant {
+        require(price > 0, "Invalid price");
 
-        IPawNFT nft =
-            IPawNFT(
-                nftContract
-            );
+        IPawNFT nft = IPawNFT(nftContract);
+        require(nft.ownerOf(tokenId) == msg.sender, "Not owner");
 
-        require(
+        nft.transferFrom(msg.sender, address(this), tokenId);
 
-            nft.ownerOf(
-                tokenId
-            )
+        listings[tokenId] = Listing({
+            seller: msg.sender,
+            nftContract: nftContract,
+            tokenId: tokenId,
+            price: price,
+            inDEX: inDEX,
+            active: true
+        });
 
-            == msg.sender,
-
-            "Not owner"
-
-        );
-
-        nft.transferFrom(
-
-            msg.sender,
-
-            address(this),
-
-            tokenId
-
-        );
-
-        listings[tokenId] =
-            Listing({
-
-                seller:
-                    msg.sender,
-
-                nftContract:
-                    nftContract,
-
-                tokenId:
-                    tokenId,
-
-                price:
-                    price,
-
-                inDEX:
-                    inDEX,
-
-                active:
-                    true
-
-            });
-
-        emit NFTListed(
-
-            tokenId,
-
-            msg.sender,
-
-            price
-
-        );
+        emit NFTListed(tokenId, msg.sender, price);
     }
 
-    function buyNFT(
-        uint256 tokenId
-    )
-        external
-        payable
-    {
+    function buyNFT(uint256 tokenId) external payable nonReentrant {
+        Listing storage listing = listings[tokenId];
+        require(listing.active, "Not listed");
 
-        Listing storage listing =
-            listings[
-                tokenId
-            ];
+        listing.active = false;
 
-        require(
-            listing.active,
-            "Not listed"
-        );
+        uint256 fee = (listing.price * nftSaleFeeBps) / 10000;
+        uint256 sellerAmount = listing.price - fee;
 
-        listing.active =
-            false;
+        if (listing.inDEX) {
+            require(dex.transferFrom(msg.sender, listing.seller, sellerAmount), "DEX seller payment failed");
+            if (fee > 0) {
+                require(dex.transferFrom(msg.sender, owner, fee), "DEX fee payment failed");
+            }
+        } else {
+            require(msg.value >= listing.price, "Need more ETH");
 
-        if(
-            listing.inDEX
-        ){
+            pendingETHWithdrawals[listing.seller] += sellerAmount;
+            emit PendingWithdrawalAdded(listing.seller, sellerAmount);
 
-            require(
+            if (fee > 0) {
+                pendingETHWithdrawals[owner] += fee;
+                emit PendingWithdrawalAdded(owner, fee);
+            }
 
-                dex.transferFrom(
-
-                    msg.sender,
-
-                    listing.seller,
-
-                    listing.price
-
-                ),
-
-                "DEX payment failed"
-
-            );
-
-        }
-        else{
-
-            require(
-
-                msg.value
-                >=
-                listing.price,
-
-                "Need more ETH"
-
-            );
-
-            payable(
-                listing.seller
-            ).transfer(
-                listing.price
-            );
-
+            uint256 excess = msg.value - listing.price;
+            if (excess > 0) {
+                pendingETHWithdrawals[msg.sender] += excess;
+                emit PendingWithdrawalAdded(msg.sender, excess);
+            }
         }
 
-        IPawNFT(
-            listing.nftContract
-        )
-        .transferFrom(
+        IPawNFT(listing.nftContract).transferFrom(address(this), msg.sender, tokenId);
 
-            address(this),
-
-            msg.sender,
-
-            tokenId
-
-        );
-
-        emit NFTSold(
-
-            tokenId,
-
-            msg.sender
-
-        );
-
+        emit NFTSold(tokenId, msg.sender);
     }
 
     function startAuction(
@@ -347,345 +191,125 @@ contract DEXNFTMarket {
         uint256 minPrice,
         bool inDEX,
         uint256 duration
-    )
-        external
-    {
-
-        require(
-            minPrice > 0,
-            "Invalid price"
-        );
-
-        require(
-            duration > 0,
-            "Invalid duration"
-        );
-
-        IPawNFT nft =
-            IPawNFT(
-                nftContract
-            );
-
-        require(
-
-            nft.ownerOf(
-                tokenId
-            )
-
-            ==
-            msg.sender,
-
-            "Not owner"
-
-        );
-
-        nft.transferFrom(
-
-            msg.sender,
-
-            address(this),
-
-            tokenId
-
-        );
-
-        auctions[tokenId] =
-            Auction({
-
-                seller:
-                    msg.sender,
-
-                nftContract:
-                    nftContract,
-
-                tokenId:
-                    tokenId,
-
-                minPrice:
-                    minPrice,
-
-                highestBid:
-                    0,
-
-                highestBidder:
-                    address(0),
-
-                inDEX:
-                    inDEX,
-
-                endTime:
-
-                    block.timestamp
-                    +
-                    duration,
-
-                active:
-                    true
-
-            });
-
-        emit AuctionStarted(
-            tokenId
-        );
-
-    }
-
-    function bid(
-        uint256 tokenId
-    )
-        external
-        payable
-    {
-
-        Auction storage auction =
-            auctions[tokenId];
-
-        require(
-            auction.active,
-            "No auction"
-        );
-
-        require(
-
-            block.timestamp
-            <
-            auction.endTime,
-
-            "Ended"
-
-        );
-
-        require(
-
-            msg.value
-            >
-            auction.highestBid,
-
-            "Bid too low"
-
-        );
-
-        require(
-
-            msg.value
-            >=
-            auction.minPrice,
-
-            "Below minimum"
-
-        );
-
-        if(
-
-            auction
-            .highestBidder
-
-            !=
-
-            address(0)
-
-        ){
-
-            payable(
-
-                auction
-                .highestBidder
-
-            ).transfer(
-
-                auction
-                .highestBid
-
-            );
-
-        }
-
-        auction.highestBid =
-            msg.value;
-
-        auction.highestBidder =
-            msg.sender;
-
-        emit BidPlaced(
-
-            tokenId,
-
-            msg.sender,
-
-            msg.value
-
-        );
-
-    }
-
-    function borrowETHWithDEX(
-        uint256 collateralDEX
-    )
-        external
-    {
-
-        require(
-            collateralDEX > 0,
-            "Invalid collateral"
-        );
-
-        require(
-
-            !dexLoans[
-                msg.sender
-            ].active,
-
-            "Loan exists"
-
-        );
-
-        require(
-
-            dex.transferFrom(
-
-                msg.sender,
-
-                address(this),
-
-                collateralDEX
-
-            ),
-
-            "DEX transfer failed"
-
-        );
-
-        uint256 ethValue =
-
-            collateralDEX
-            /
-            (100 * 1e18);
-
-        require(
-
-            address(this)
-            .balance
-
-            >=
-
-            ethValue,
-
-            "No liquidity"
-
-        );
-
-        dexLoans[
-            msg.sender
-
-        ] = DexLoan({
-
-            borrower:
-                msg.sender,
-
-            collateralDEX:
-                collateralDEX,
-
-            borrowedETH:
-                ethValue,
-
-            startTime:
-                block.timestamp,
-
-            nextPaymentDue:
-
-                block.timestamp
-                +
-                paymentCycle,
-
-            active:
-                true
-
+    ) external nonReentrant {
+        require(minPrice > 0, "Invalid price");
+        require(duration > 0, "Invalid duration");
+        require(!inDEX, "DEX bids unsupported");
+
+        IPawNFT nft = IPawNFT(nftContract);
+        require(nft.ownerOf(tokenId) == msg.sender, "Not owner");
+
+        nft.transferFrom(msg.sender, address(this), tokenId);
+
+        auctions[tokenId] = Auction({
+            seller: msg.sender,
+            nftContract: nftContract,
+            tokenId: tokenId,
+            minPrice: minPrice,
+            highestBid: 0,
+            highestBidder: address(0),
+            inDEX: false,
+            endTime: block.timestamp + duration,
+            active: true
         });
 
-        payable(
-            msg.sender
-        ).transfer(
-            ethValue
-        );
-
-        emit DexLoanOpened(
-
-            msg.sender,
-
-            collateralDEX,
-
-            ethValue
-
-        );
-
+        emit AuctionStarted(tokenId);
     }
 
-    function repayDEXLoan()
-        external
-        payable
-    {
+    function bid(uint256 tokenId) external payable nonReentrant {
+        Auction storage auction = auctions[tokenId];
 
-        DexLoan storage loan =
+        require(auction.active, "No auction");
+        require(!auction.inDEX, "DEX bids unsupported");
+        require(block.timestamp < auction.endTime, "Ended");
+        require(msg.value > auction.highestBid, "Bid too low");
+        require(msg.value >= auction.minPrice, "Below minimum");
 
-            dexLoans[
-                msg.sender
-            ];
+        if (auction.highestBidder != address(0)) {
+            pendingETHWithdrawals[auction.highestBidder] += auction.highestBid;
+            emit PendingWithdrawalAdded(auction.highestBidder, auction.highestBid);
+        }
 
-        require(
+        auction.highestBid = msg.value;
+        auction.highestBidder = msg.sender;
 
-            loan.active,
+        emit BidPlaced(tokenId, msg.sender, msg.value);
+    }
 
-            "No loan"
+    function endAuction(uint256 tokenId) external nonReentrant {
+        Auction storage auction = auctions[tokenId];
 
-        );
+        require(auction.active, "No auction");
+        require(block.timestamp >= auction.endTime, "Too early");
 
-        uint256 interest =
+        auction.active = false;
 
-            loan.borrowedETH
-            *
-            dexLoanInterestBps
+        if (auction.highestBidder == address(0)) {
+            IPawNFT(auction.nftContract).transferFrom(address(this), auction.seller, tokenId);
+            emit AuctionEnded(tokenId, address(0));
+            return;
+        }
 
-            /
+        uint256 fee = (auction.highestBid * nftSaleFeeBps) / 10000;
+        uint256 sellerAmount = auction.highestBid - fee;
 
-            10000;
+        pendingETHWithdrawals[auction.seller] += sellerAmount;
+        emit PendingWithdrawalAdded(auction.seller, sellerAmount);
 
-        uint256 total =
+        if (fee > 0) {
+            pendingETHWithdrawals[owner] += fee;
+            emit PendingWithdrawalAdded(owner, fee);
+        }
 
-            loan.borrowedETH
-            +
-            interest;
+        IPawNFT(auction.nftContract).transferFrom(address(this), auction.highestBidder, tokenId);
 
-        require(
+        emit AuctionEnded(tokenId, auction.highestBidder);
+    }
 
-            msg.value
-            >=
-            total,
+    function borrowETHWithDEX(uint256 collateralDEX) external nonReentrant {
+        require(collateralDEX > 0, "Invalid collateral");
+        require(!dexLoans[msg.sender].active, "Loan exists");
 
-            "Need more ETH"
+        require(dex.transferFrom(msg.sender, address(this), collateralDEX), "DEX transfer failed");
 
-        );
+        uint256 ethValue = collateralDEX / (100 * 1e18);
+        require(address(this).balance >= ethValue, "No liquidity");
 
-        loan.active =
-            false;
+        dexLoans[msg.sender] = DexLoan({
+            borrower: msg.sender,
+            collateralDEX: collateralDEX,
+            borrowedETH: ethValue,
+            startTime: block.timestamp,
+            nextPaymentDue: block.timestamp + paymentCycle,
+            active: true
+        });
 
-        require(
+        pendingETHWithdrawals[msg.sender] += ethValue;
+        emit PendingWithdrawalAdded(msg.sender, ethValue);
 
-            dex.transfer(
+        emit DexLoanOpened(msg.sender, collateralDEX, ethValue);
+    }
 
-                msg.sender,
+    function repayDEXLoan() external payable nonReentrant {
+        DexLoan storage loan = dexLoans[msg.sender];
+        require(loan.active, "No loan");
 
-                loan.collateralDEX
+        uint256 interest = (loan.borrowedETH * dexLoanInterestBps) / 10000;
+        uint256 total = loan.borrowedETH + interest;
 
-            ),
+        require(msg.value >= total, "Need more ETH");
 
-            "DEX return failed"
+        loan.active = false;
 
-        );
+        require(dex.transfer(msg.sender, loan.collateralDEX), "DEX return failed");
 
-        emit DexLoanClosed(
-            msg.sender
-        );
+        uint256 excess = msg.value - total;
+        if (excess > 0) {
+            pendingETHWithdrawals[msg.sender] += excess;
+            emit PendingWithdrawalAdded(msg.sender, excess);
+        }
 
+        emit DexLoanClosed(msg.sender);
     }
 
     function requestNFTLoan(
@@ -694,337 +318,98 @@ contract DEXNFTMarket {
         uint256 requestedETH,
         uint256 interestRateBps,
         uint256 duration
-    )
-        external
-    {
+    ) external nonReentrant {
+        require(requestedETH > 0, "Invalid ETH");
+        require(duration > 0, "Invalid duration");
 
-        require(
-            requestedETH > 0,
-            "Invalid ETH"
-        );
+        IPawNFT nft = IPawNFT(nftContract);
+        require(nft.ownerOf(tokenId) == msg.sender, "Not owner");
 
-        require(
-            duration > 0,
-            "Invalid duration"
-        );
+        nft.transferFrom(msg.sender, address(this), tokenId);
 
-        IPawNFT nft =
-            IPawNFT(
-                nftContract
-            );
+        nftLoans[tokenId] = NftLoanRequest({
+            borrower: msg.sender,
+            nftContract: nftContract,
+            tokenId: tokenId,
+            requestedETH: requestedETH,
+            interestRateBps: interestRateBps,
+            duration: duration,
+            fundedAt: 0,
+            deadline: 0,
+            lender: address(0),
+            lenderDEXLocked: 0,
+            funded: false,
+            active: true
+        });
 
-        require(
-
-            nft.ownerOf(
-                tokenId
-            )
-
-            ==
-            msg.sender,
-
-            "Not owner"
-
-        );
-
-        nft.transferFrom(
-
-            msg.sender,
-
-            address(this),
-
-            tokenId
-
-        );
-
-        nftLoans[tokenId] =
-            NftLoanRequest({
-
-                borrower:
-                    msg.sender,
-
-                nftContract:
-                    nftContract,
-
-                tokenId:
-                    tokenId,
-
-                requestedETH:
-                    requestedETH,
-
-                interestRateBps:
-                    interestRateBps,
-
-                duration:
-                    duration,
-
-                lender:
-                    address(0),
-
-                lenderDEXLocked:
-                    0,
-
-                funded:
-                    false,
-
-                active:
-                    true
-
-            });
-
-        emit NFTLoanRequested(
-
-            tokenId,
-
-            requestedETH
-
-        );
-
+        emit NFTLoanRequested(tokenId, requestedETH);
     }
 
-    function fundNFTLoan(
-        uint256 tokenId,
-        uint256 dexBacking
-    )
-        external
-    {
+    function fundNFTLoan(uint256 tokenId, uint256 dexBacking) external nonReentrant {
+        NftLoanRequest storage loan = nftLoans[tokenId];
 
-        NftLoanRequest
-        storage loan =
+        require(loan.active, "No loan");
+        require(!loan.funded, "Funded");
+        require(dex.transferFrom(msg.sender, address(this), dexBacking), "DEX failed");
+        require(address(this).balance >= loan.requestedETH, "No ETH");
 
-            nftLoans[
-                tokenId
-            ];
+        loan.lender = msg.sender;
+        loan.lenderDEXLocked = dexBacking;
+        loan.funded = true;
+        loan.fundedAt = block.timestamp;
+        loan.deadline = block.timestamp + loan.duration;
 
-        require(
-            loan.active,
-            "No loan"
-        );
+        pendingETHWithdrawals[loan.borrower] += loan.requestedETH;
+        emit PendingWithdrawalAdded(loan.borrower, loan.requestedETH);
 
-        require(
-            !loan.funded,
-            "Funded"
-        );
-
-        require(
-
-            dex.transferFrom(
-
-                msg.sender,
-
-                address(this),
-
-                dexBacking
-
-            ),
-
-            "DEX failed"
-
-        );
-
-        require(
-
-            address(this)
-            .balance
-
-            >=
-
-            loan
-            .requestedETH,
-
-            "No ETH"
-
-        );
-
-        loan.lender =
-            msg.sender;
-
-        loan.lenderDEXLocked =
-            dexBacking;
-
-        loan.funded =
-            true;
-
-        payable(
-            loan.borrower
-        ).transfer(
-
-            loan.requestedETH
-
-        );
-
-        emit NFTLoanFunded(
-
-            tokenId,
-
-            msg.sender
-
-        );
-
+        emit NFTLoanFunded(tokenId, msg.sender);
     }
 
-    function repayNFTLoan(
-        uint256 tokenId
-    )
-        external
-        payable
-    {
+    function repayNFTLoan(uint256 tokenId) external payable nonReentrant {
+        NftLoanRequest storage loan = nftLoans[tokenId];
 
-        NftLoanRequest
-        storage loan =
+        require(loan.funded, "No funding");
+        require(loan.active, "Inactive loan");
+        require(msg.sender == loan.borrower, "Not borrower");
 
-            nftLoans[
-                tokenId
-            ];
+        uint256 interest = (loan.requestedETH * loan.interestRateBps) / 10000;
+        uint256 total = loan.requestedETH + interest;
 
-        require(
-            loan.funded,
-            "No funding"
-        );
+        require(msg.value >= total, "Need ETH");
 
-        require(
+        loan.active = false;
 
-            msg.sender
-            ==
-            loan.borrower,
+        IPawNFT(loan.nftContract).transferFrom(address(this), loan.borrower, tokenId);
+        require(dex.transfer(loan.lender, loan.lenderDEXLocked), "DEX return failed");
 
-            "Not borrower"
+        uint256 lenderShare = interest / 2;
+        if (lenderShare > 0) {
+            pendingETHWithdrawals[loan.lender] += lenderShare;
+            emit PendingWithdrawalAdded(loan.lender, lenderShare);
+        }
 
-        );
-
-        uint256 interest =
-
-            loan.requestedETH
-
-            *
-
-            loan.interestRateBps
-
-            /
-
-            10000;
-
-        uint256 total =
-
-            loan.requestedETH
-            +
-            interest;
-
-        require(
-
-            msg.value
-            >=
-            total,
-
-            "Need ETH"
-
-        );
-
-        IPawNFT(
-
-            loan.nftContract
-
-        )
-
-        .transferFrom(
-
-            address(this),
-
-            loan.borrower,
-
-            tokenId
-
-        );
-
-        dex.transfer(
-
-            loan.lender,
-
-            loan.lenderDEXLocked
-
-        );
-
-        payable(
-            loan.lender
-        ).transfer(
-            interest
-        );
-
-        loan.active =
-            false;
-
+        uint256 excess = msg.value - total;
+        if (excess > 0) {
+            pendingETHWithdrawals[msg.sender] += excess;
+            emit PendingWithdrawalAdded(msg.sender, excess);
+        }
     }
 
-    function claimNFTDefault(
-        uint256 tokenId
-    )
-        external
-    {
+    function claimNFTDefault(uint256 tokenId) external nonReentrant {
+        NftLoanRequest storage loan = nftLoans[tokenId];
 
-        NftLoanRequest
-        storage loan =
+        require(loan.funded, "No funding");
+        require(loan.active, "Inactive loan");
+        require(msg.sender == loan.lender, "Not lender");
+        require(loan.deadline > 0, "Deadline not set");
+        require(block.timestamp > loan.deadline, "Too early");
 
-            nftLoans[
-                tokenId
-            ];
+        loan.active = false;
 
-        require(
-
-            loan.funded,
-
-            "No funding"
-
-        );
-
-        require(
-
-            msg.sender
-            ==
-            loan.lender,
-
-            "Not lender"
-
-        );
-
-        require(
-
-            block.timestamp
-
-            >
-
-            loan.duration,
-
-            "Too early"
-
-        );
-
-        IPawNFT(
-
-            loan.nftContract
-
-        )
-
-        .transferFrom(
-
-            address(this),
-
-            loan.lender,
-
-            tokenId
-
-        );
-
-        loan.active =
-            false;
-
+        IPawNFT(loan.nftContract).transferFrom(address(this), owner, tokenId);
+        require(dex.transfer(loan.lender, loan.lenderDEXLocked), "DEX return failed");
     }
 
-    receive()
-        external
-        payable
-    {}
-
-    fallback()
-        external
-        payable
-{}
+    receive() external payable {}
+    fallback() external payable {}
 }
