@@ -65,6 +65,11 @@ export default function App() {
   const [wallet, setWallet] = useState("");
   const [status, setStatus] = useState("Connect your wallet to start.");
   const [loading, setLoading] = useState(false);
+  const [backendStatus, setBackendStatus] = useState(null);
+  const [backendStatusError, setBackendStatusError] = useState(null);
+
+  const [indexedListings, setIndexedListings] = useState([]);
+  const [indexedAuctions, setIndexedAuctions] = useState([]);
 
   const [dexBalance, setDexBalance] = useState("0");
   const [ethBalance, setEthBalance] = useState("0");
@@ -136,6 +141,7 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", next);
   }, []);
 
+  // Sincroniza MetaMask (contas / chain)
   useEffect(() => {
     if (!window.ethereum) return;
 
@@ -177,14 +183,20 @@ export default function App() {
     };
   }, []);
 
- useEffect(() => {
-	async function load() {
-	  if (!provider || !wallet) return;
-	  await refreshData();
-	}
-
-	load();
+  // Quando provider+wallet estiverem prontos, faz refresh on-chain
+  useEffect(() => {
+    if (!provider || !wallet) return;
+    refreshData();
   }, [provider, wallet, contracts]);
+
+  // Quando a app monta, chama o backend
+  useEffect(() => {
+    loadBackendStatus();
+    loadIndexedListings();
+    loadIndexedAuctions();
+  }, []);
+
+
 
   async function connectWallet() {
     try {
@@ -218,6 +230,46 @@ export default function App() {
     }
   }
 
+    const BACKEND_URL = "http://localhost:4000";
+
+  async function loadBackendStatus() {
+    try {
+      const res = await fetch(`${BACKEND_URL}/status`);
+      if (!res.ok) throw new Error(`Status ${res.status}`);
+      const data = await res.json();
+      setBackendStatus(data);
+      setBackendStatusError(null);
+    } catch (err) {
+      console.error("loadBackendStatus error:", err);
+      setBackendStatus(null);
+      setBackendStatusError(err.message || "Failed to load backend status.");
+    }
+  }
+
+  async function loadIndexedListings() {
+    try {
+      const res = await fetch(`${BACKEND_URL}/listings?active=true`);
+      if (!res.ok) throw new Error(`Status ${res.status}`);
+      const data = await res.json();
+      setIndexedListings(data);
+    } catch (err) {
+      console.error("loadIndexedListings error:", err);
+      setIndexedListings([]);
+    }
+  }
+
+  async function loadIndexedAuctions() {
+    try {
+      const res = await fetch(`${BACKEND_URL}/auctions?active=true`);
+      if (!res.ok) throw new Error(`Status ${res.status}`);
+      const data = await res.json();
+      setIndexedAuctions(data);
+    } catch (err) {
+      console.error("loadIndexedAuctions error:", err);
+      setIndexedAuctions([]);
+    }
+  }
+
   async function refreshData() {
     try {
       if (!provider || !wallet || !contracts.dexRead || !contracts.nftRead || !contracts.marketRead) {
@@ -236,6 +288,7 @@ export default function App() {
 		  cycle,
 		  interest,
 		  earlyFee,
+      saleFee,
 		  pending,
 		] = await Promise.all([
 		  provider.getBalance(wallet),
@@ -247,19 +300,20 @@ export default function App() {
 		  contracts.marketRead.paymentCycle(),
 		  contracts.marketRead.dexLoanInterestBps(),
 		  contracts.marketRead.earlyCloseFeeBps(),
+      contracts.marketRead.nftSaleFeeBps(),
 		  contracts.marketRead.pendingETHWithdrawals(wallet),
 		]);
 
 	  setNftSaleFeeBps(saleFee.toString());
-      setEthBalance(ethBal.toString());
-      setDexBalance(dexBal.toString());
-      setTokenPrice(price.toString());
-      setEthReserve(reserve.toString());
-      setNftCount(nftBal.toString());
-      setNextTokenId(nextId.toString());
-      setPaymentCycle(cycle.toString());
-      setInterestBps(interest.toString());
-      setEarlyFeeBps(earlyFee.toString());
+    setEthBalance(ethBal.toString());
+    setDexBalance(dexBal.toString());
+    setTokenPrice(price.toString());
+    setEthReserve(reserve.toString());
+    setNftCount(nftBal.toString());
+    setNextTokenId(nextId.toString());
+    setPaymentCycle(cycle.toString());
+    setInterestBps(interest.toString());
+    setEarlyFeeBps(earlyFee.toString());
 	  setPendingEth(pending.toString());
 
       try {
@@ -489,6 +543,35 @@ export default function App() {
                 <li>Open a DEX-backed or NFT-backed loan.</li>
               </ol>
             </article>
+                    <article className="stat-card">
+          <span className="label">Backend / Indexer</span>
+          {backendStatus ? (
+            <>
+              <div className="info-list compact">
+                <div>
+                  <span>Network</span>
+                  <strong>{backendStatus.network}</strong>
+                </div>
+                <div>
+                  <span>Latest indexed block</span>
+                  <strong>{backendStatus.latestBlock}</strong>
+                </div>
+                <div>
+                  <span>Listings indexed</span>
+                  <strong>{backendStatus.listings}</strong>
+                </div>
+                <div>
+                  <span>Auctions indexed</span>
+                  <strong>{backendStatus.auctions}</strong>
+                </div>
+              </div>
+            </>
+          ) : backendStatusError ? (
+            <p className="muted">Backend error: {backendStatusError}</p>
+          ) : (
+            <p className="muted">Loading backend status...</p>
+          )}
+        </article>
           </section>
         )}
 
@@ -666,335 +749,424 @@ export default function App() {
         )}
 
         {activeTab === "market" && (
-          <section className="panel-grid">
-            <article className="card">
-              <div className="card-head">
-                <h3>List NFT</h3>
-              </div>
-				<p className="muted">
-				  Current NFT sale fee: {(Number(nftSaleFeeBps) / 100).toFixed(2)}%. The seller receives the remaining amount.
-				</p>
-              <div className="form-grid">
+          <>
+            <section className="panel-grid">
+              <article className="card">
+                <div className="card-head">
+                  <h3>List NFT</h3>
+                </div>
+                <p className="muted">
+                  Current NFT sale fee: {(Number(nftSaleFeeBps) / 100).toFixed(2)}%. The seller receives the remaining amount.
+                </p>
+                <div className="form-grid">
+                  <div className="field">
+                    <label>Token ID</label>
+                    <input
+                      value={listTokenId}
+                      onChange={(e) => setListTokenId(e.target.value)}
+                      placeholder="0"
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Price</label>
+                    <input
+                      value={listPrice}
+                      onChange={(e) => setListPrice(e.target.value)}
+                      placeholder="1.0"
+                    />
+                  </div>
+                </div>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={listInDex}
+                    onChange={(e) => setListInDex(e.target.checked)}
+                  />
+                  Sell in DEX instead of ETH
+                </label>
+                <button
+                  className="primary-btn full"
+                  disabled={!contracts.marketWrite || !listTokenId || !listPrice || loading}
+                  onClick={() => {
+                    const tokenId = safeNumber(listTokenId);
+                    const parsedPrice = listInDex ? safeParseDex(listPrice) : safeParseEth(listPrice);
+
+                    if (tokenId === null) {
+                      setStatus("Enter a valid token ID.");
+                      return;
+                    }
+                    if (!parsedPrice) {
+                      setStatus(`Enter a valid ${listInDex ? "DEX" : "ETH"} listing price.`);
+                      return;
+                    }
+
+                    runTx(
+                      () => contracts.marketWrite.listNFT(NFT, tokenId, parsedPrice, listInDex),
+                      "NFT listed successfully."
+                    );
+                  }}
+                >
+                  Create listing
+                </button>
+              </article>
+
+              <article className="card">
+                <div className="card-head">
+                  <h3>Buy NFT</h3>
+                </div>
                 <div className="field">
                   <label>Token ID</label>
                   <input
-                    value={listTokenId}
-                    onChange={(e) => setListTokenId(e.target.value)}
+                    value={buyTokenId}
+                    onChange={(e) => setBuyTokenId(e.target.value)}
                     placeholder="0"
                   />
                 </div>
                 <div className="field">
-                  <label>Price</label>
+                  <label>Payment value (only for ETH purchases)</label>
                   <input
-                    value={listPrice}
-                    onChange={(e) => setListPrice(e.target.value)}
+                    value={buyValue}
+                    onChange={(e) => setBuyValue(e.target.value)}
                     placeholder="1.0"
                   />
                 </div>
-              </div>
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={listInDex}
-                  onChange={(e) => setListInDex(e.target.checked)}
-                />
-                Sell in DEX instead of ETH
-              </label>
-              <button
-                className="primary-btn full"
-                disabled={!contracts.marketWrite || !listTokenId || !listPrice || loading}
-                onClick={() => {
-                  const tokenId = safeNumber(listTokenId);
-                  const parsedPrice = listInDex ? safeParseDex(listPrice) : safeParseEth(listPrice);
+                <button
+                  className="primary-btn full"
+                  disabled={!contracts.marketWrite || !buyTokenId || loading}
+                  onClick={() => {
+                    const tokenId = safeNumber(buyTokenId);
+                    if (tokenId === null) {
+                      setStatus("Enter a valid token ID.");
+                      return;
+                    }
 
-                  if (tokenId === null) {
-                    setStatus("Enter a valid token ID.");
-                    return;
-                  }
-                  if (!parsedPrice) {
-                    setStatus(`Enter a valid ${listInDex ? "DEX" : "ETH"} listing price.`);
-                    return;
-                  }
+                    const parsedValue = safeParseEth(buyValue);
+                    if (buyValue && !parsedValue) {
+                      setStatus("Enter a valid ETH value for the purchase.");
+                      return;
+                    }
 
-                  runTx(
-                    () => contracts.marketWrite.listNFT(NFT, tokenId, parsedPrice, listInDex),
-                    "NFT listed successfully."
-                  );
-                }}
-              >
-                Create listing
-              </button>
-            </article>
+                    runTx(
+                      () =>
+                        parsedValue
+                          ? contracts.marketWrite.buyNFT(tokenId, { value: parsedValue })
+                          : contracts.marketWrite.buyNFT(tokenId),
+                      "NFT purchased successfully."
+                    );
+                  }}
+                >
+                  Buy listed NFT
+                </button>
+              </article>
 
-            <article className="card">
+              <article className="card">
+                <div className="card-head">
+                  <h3>Read listing</h3>
+                </div>
+                <div className="field">
+                  <label>Token ID</label>
+                  <input
+                    value={lookupListingTokenId}
+                    onChange={(e) => setLookupListingTokenId(e.target.value)}
+                    placeholder="0"
+                  />
+                </div>
+                <button
+                  className="secondary-btn full"
+                  disabled={!contracts.marketRead || !lookupListingTokenId || loading}
+                  onClick={readListing}
+                >
+                  Load listing
+                </button>
+
+                {listingInfo && (
+                  <div className="info-list compact top-gap">
+                    <div>
+                      <span>Seller</span>
+                      <strong>{shortAddress(listingInfo.seller)}</strong>
+                    </div>
+                    <div>
+                      <span>Price</span>
+                      <strong>
+                        {listingInfo.price
+                          ? listingInfo.inDEX
+                            ? `${formatDex(listingInfo.price)} DEX`
+                            : `${formatEth(listingInfo.price)} ETH`
+                          : "0"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>In DEX</span>
+                      <strong>{String(listingInfo.inDEX)}</strong>
+                    </div>
+                    <div>
+                      <span>Active</span>
+                      <strong>{String(listingInfo.active)}</strong>
+                    </div>
+                  </div>
+                )}
+              </article>
+            </section>
+
+            <section className="card top-gap">
               <div className="card-head">
-                <h3>Buy NFT</h3>
+                <h3>Indexed listings (from backend)</h3>
               </div>
-              <div className="field">
-                <label>Token ID</label>
-                <input
-                  value={buyTokenId}
-                  onChange={(e) => setBuyTokenId(e.target.value)}
-                  placeholder="0"
-                />
-              </div>
-              <div className="field">
-                <label>Payment value (only for ETH purchases)</label>
-                <input
-                  value={buyValue}
-                  onChange={(e) => setBuyValue(e.target.value)}
-                  placeholder="1.0"
-                />
-              </div>
-              <button
-                className="primary-btn full"
-                disabled={!contracts.marketWrite || !buyTokenId || loading}
-                onClick={() => {
-                  const tokenId = safeNumber(buyTokenId);
-                  if (tokenId === null) {
-                    setStatus("Enter a valid token ID.");
-                    return;
-                  }
+              <p className="muted">
+                This table is powered by the backend indexer, which listens to on-chain events
+                and stores active listings in a database.
+              </p>
 
-                  const parsedValue = safeParseEth(buyValue);
-                  if (buyValue && !parsedValue) {
-                    setStatus("Enter a valid ETH value for the purchase.");
-                    return;
-                  }
-
-                  runTx(
-                    () =>
-                      parsedValue
-                        ? contracts.marketWrite.buyNFT(tokenId, { value: parsedValue })
-                        : contracts.marketWrite.buyNFT(tokenId),
-                    "NFT purchased successfully."
-                  );
-                }}
-              >
-                Buy listed NFT
-              </button>
-            </article>
-
-            <article className="card">
-              <div className="card-head">
-                <h3>Read listing</h3>
-              </div>
-              <div className="field">
-                <label>Token ID</label>
-                <input
-                  value={lookupListingTokenId}
-                  onChange={(e) => setLookupListingTokenId(e.target.value)}
-                  placeholder="0"
-                />
-              </div>
-              <button
-                className="secondary-btn full"
-                disabled={!contracts.marketRead || !lookupListingTokenId || loading}
-                onClick={readListing}
-              >
-                Load listing
-              </button>
-
-              {listingInfo && (
-                <div className="info-list compact top-gap">
-                  <div>
-                    <span>Seller</span>
-                    <strong>{shortAddress(listingInfo.seller)}</strong>
-                  </div>
-					<div>
-					  <span>Price</span>
-					  <strong>
-						{listingInfo.price
-						  ? listingInfo.inDEX
-							? `${formatDex(listingInfo.price)} DEX`
-							: `${formatEth(listingInfo.price)} ETH`
-						  : "0"}
-					  </strong>
-					</div>
-                  <div>
-                    <span>In DEX</span>
-                    <strong>{String(listingInfo.inDEX)}</strong>
-                  </div>
-                  <div>
-                    <span>Active</span>
-                    <strong>{String(listingInfo.active)}</strong>
-                  </div>
+              {indexedListings.length === 0 ? (
+                <p className="muted">No active listings indexed.</p>
+              ) : (
+                <div className="table-wrapper">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Token ID</th>
+                        <th>Seller</th>
+                        <th>Price (ETH)</th>
+                        <th>Active</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {indexedListings.map((row) => (
+                        <tr key={row.id}>
+                          <td>{row.token_id}</td>
+                          <td>{shortAddress(row.seller)}</td>
+                          <td>{formatEth(row.price_wei)} ETH</td>
+                          <td>{row.active ? "Yes" : "No"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
-            </article>
-          </section>
+            </section>
+          </>
         )}
 
         {activeTab === "auctions" && (
-          <section className="panel-grid">
-                  <article className="card">
-					<div className="card-head">
-					  <h3>Start auction</h3>
-					</div>
-					<div className="form-grid">
-					  <div className="field">
-						<label>Token ID</label>
-						<input
-						  value={auctionTokenId}
-						  onChange={(e) => setAuctionTokenId(e.target.value)}
-						  placeholder="0"
-						/>
-					  </div>
-					  <div className="field">
-						<label>Min price (ETH)</label>
-						<input
-						  value={auctionMinPrice}
-						  onChange={(e) => setAuctionMinPrice(e.target.value)}
-						  placeholder="0.5"
-						/>
-					  </div>
-					  <div className="field">
-						<label>Duration (sec)</label>
-						<input
-						  value={auctionDuration}
-						  onChange={(e) => setAuctionDuration(e.target.value)}
-						  placeholder="3600"
-						/>
-					  </div>
-					</div>
-					<p className="muted">
-					  Auctions accept ETH bids only; DEX bids are disabled in this version.
-					</p>
-					<button
-					  className="primary-btn full"
-					  disabled={
-						!contracts.marketWrite ||
-						!auctionTokenId ||
-						!auctionMinPrice ||
-						!auctionDuration ||
-						loading
-					  }
-					  onClick={() =>
-						runTx(
-						  () =>
-							contracts.marketWrite.startAuction(
-							  NFT,
-							  auctionTokenId,
-							  ethers.parseEther(auctionMinPrice),
-							  false, // inDEX = false, ETH-only
-							  auctionDuration
-							),
-						  "Auction started successfully."
-						)
-					  }
-					>
-					  Start auction
-					</button>
-				  </article>
-
-            <article className="card">
-              <div className="card-head">
-                <h3>Bid on auction</h3>
-              </div>
-              <div className="field">
-                <label>Token ID</label>
-                <input
-                  value={bidTokenId}
-                  onChange={(e) => setBidTokenId(e.target.value)}
-                  placeholder="0"
-                />
-              </div>
-              <div className="field">
-                <label>Bid amount</label>
-                <input
-                  value={bidAmount}
-                  onChange={(e) => setBidAmount(e.target.value)}
-                  placeholder="0.8"
-                />
-              </div>
-              <button
-                className="primary-btn full"
-                disabled={!contracts.marketWrite || !bidTokenId || !bidAmount || loading}
-                onClick={() => {
-                  const tokenId = safeNumber(bidTokenId);
-                  const parsedBid = safeParseEth(bidAmount);
-
-                  if (tokenId === null) {
-                    setStatus("Enter a valid token ID.");
-                    return;
+          <>
+            <section className="panel-grid">
+              <article className="card">
+                <div className="card-head">
+                  <h3>Start auction</h3>
+                </div>
+                <div className="form-grid">
+                  <div className="field">
+                    <label>Token ID</label>
+                    <input
+                      value={auctionTokenId}
+                      onChange={(e) => setAuctionTokenId(e.target.value)}
+                      placeholder="0"
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Min price (ETH)</label>
+                    <input
+                      value={auctionMinPrice}
+                      onChange={(e) => setAuctionMinPrice(e.target.value)}
+                      placeholder="0.5"
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Duration (sec)</label>
+                    <input
+                      value={auctionDuration}
+                      onChange={(e) => setAuctionDuration(e.target.value)}
+                      placeholder="3600"
+                    />
+                  </div>
+                </div>
+                <p className="muted">
+                  Auctions accept ETH bids only; DEX bids are disabled in this version.
+                </p>
+                <button
+                  className="primary-btn full"
+                  disabled={
+                    !contracts.marketWrite ||
+                    !auctionTokenId ||
+                    !auctionMinPrice ||
+                    !auctionDuration ||
+                    loading
                   }
-                  if (!parsedBid) {
-                    setStatus("Enter a valid ETH bid amount.");
-                    return;
+                  onClick={() =>
+                    runTx(
+                      () =>
+                        contracts.marketWrite.startAuction(
+                          NFT,
+                          auctionTokenId,
+                          ethers.parseEther(auctionMinPrice),
+                          false, // inDEX = false, ETH-only
+                          auctionDuration
+                        ),
+                      "Auction started successfully."
+                    )
                   }
+                >
+                  Start auction
+                </button>
+              </article>
 
-                  runTx(
-                    () => contracts.marketWrite.bid(tokenId, { value: parsedBid }),
-                    "Bid placed successfully."
-                  );
-                }}
-              >
-                Place bid
-              </button>
-            </article>
+              <article className="card">
+                <div className="card-head">
+                  <h3>Bid on auction</h3>
+                </div>
+                <div className="field">
+                  <label>Token ID</label>
+                  <input
+                    value={bidTokenId}
+                    onChange={(e) => setBidTokenId(e.target.value)}
+                    placeholder="0"
+                  />
+                </div>
+                <div className="field">
+                  <label>Bid amount</label>
+                  <input
+                    value={bidAmount}
+                    onChange={(e) => setBidAmount(e.target.value)}
+                    placeholder="0.8"
+                  />
+                </div>
+                <button
+                  className="primary-btn full"
+                  disabled={!contracts.marketWrite || !bidTokenId || !bidAmount || loading}
+                  onClick={() => {
+                    const tokenId = safeNumber(bidTokenId);
+                    const parsedBid = safeParseEth(bidAmount);
 
-            <article className="card">
+                    if (tokenId === null) {
+                      setStatus("Enter a valid token ID.");
+                      return;
+                    }
+                    if (!parsedBid) {
+                      setStatus("Enter a valid ETH bid amount.");
+                      return;
+                    }
+
+                    runTx(
+                      () => contracts.marketWrite.bid(tokenId, { value: parsedBid }),
+                      "Bid placed successfully."
+                    );
+                  }}
+                >
+                  Place bid
+                </button>
+              </article>
+
+              <article className="card">
+                <div className="card-head">
+                  <h3>Read auction</h3>
+                </div>
+                <div className="field">
+                  <label>Token ID</label>
+                  <input
+                    value={lookupAuctionTokenId}
+                    onChange={(e) => setLookupAuctionTokenId(e.target.value)}
+                    placeholder="0"
+                  />
+                </div>
+                <button
+                  className="secondary-btn full"
+                  disabled={!contracts.marketRead || !lookupAuctionTokenId || loading}
+                  onClick={readAuction}
+                >
+                  Load auction
+                </button>
+
+                {auctionInfo && (
+                  <div className="info-list compact top-gap">
+                    <div>
+                      <span>Seller</span>
+                      <strong>{shortAddress(auctionInfo.seller)}</strong>
+                    </div>
+                    <div>
+                      <span>Min price</span>
+                      <strong>
+                        {auctionInfo.minPrice ? `${formatEth(auctionInfo.minPrice)} ETH` : "0"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Highest bid</span>
+                      <strong>
+                        {auctionInfo.highestBid ? `${formatEth(auctionInfo.highestBid)} ETH` : "0"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Highest bidder</span>
+                      <strong>
+                        {auctionInfo.highestBidder && auctionInfo.highestBidder !== ethers.ZeroAddress
+                          ? shortAddress(auctionInfo.highestBidder)
+                          : "No bids yet"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Ends at</span>
+                      <strong>
+                        {auctionInfo.endTime
+                          ? new Date(Number(auctionInfo.endTime) * 1000).toLocaleString()
+                          : "0"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>In DEX</span>
+                      <strong>{String(auctionInfo.inDEX)}</strong>
+                    </div>
+                    <div>
+                      <span>Active</span>
+                      <strong>{String(auctionInfo.active)}</strong>
+                    </div>
+                  </div>
+                )}
+              </article>
+            </section>
+
+            <section className="card top-gap">
               <div className="card-head">
-                <h3>Read auction</h3>
+                <h3>Indexed auctions (from backend)</h3>
               </div>
-              <div className="field">
-                <label>Token ID</label>
-                <input
-                  value={lookupAuctionTokenId}
-                  onChange={(e) => setLookupAuctionTokenId(e.target.value)}
-                  placeholder="0"
-                />
-              </div>
-              <button
-                className="secondary-btn full"
-                disabled={!contracts.marketRead || !lookupAuctionTokenId || loading}
-                onClick={readAuction}
-              >
-                Load auction
-              </button>
+              <p className="muted">
+                Active auctions as tracked by the backend indexer.
+              </p>
 
-			{auctionInfo && (
-			  <div className="info-list compact top-gap">
-				<div>
-				  <span>Seller</span>
-				  <strong>{shortAddress(auctionInfo.seller)}</strong>
-				</div>
-					<div>
-					  <span>Min price</span>
-					  <strong>{auctionInfo.minPrice ? `${formatEth(auctionInfo.minPrice)} ETH` : "0"}</strong>
-					</div>
-					<div>
-					  <span>Highest bid</span>
-					  <strong>{auctionInfo.highestBid ? `${formatEth(auctionInfo.highestBid)} ETH` : "0"}</strong>
-					</div>
-				<div>
-				  <span>Highest bidder</span>
-				  <strong>
-					{auctionInfo.highestBidder && auctionInfo.highestBidder !== ethers.ZeroAddress
-					  ? shortAddress(auctionInfo.highestBidder)
-					  : "No bids yet"}
-				  </strong>
-				</div>
-				<div>
-				  <span>Ends at</span>
-				  <strong>
-					{auctionInfo.endTime
-					  ? new Date(Number(auctionInfo.endTime) * 1000).toLocaleString()
-					  : "0"}
-				  </strong>
-				</div>
-				<div>
-				  <span>In DEX</span>
-				  <strong>{String(auctionInfo.inDEX)}</strong>
-				</div>
-				<div>
-				  <span>Active</span>
-				  <strong>{String(auctionInfo.active)}</strong>
-				</div>
-			  </div>
-			)}
-            </article>
-          </section>
+              {indexedAuctions.length === 0 ? (
+                <p className="muted">No active auctions indexed.</p>
+              ) : (
+                <div className="table-wrapper">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Token ID</th>
+                        <th>Seller</th>
+                        <th>Min price (ETH)</th>
+                        <th>Highest bid (ETH)</th>
+                        <th>Highest bidder</th>
+                        <th>End time (unix)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {indexedAuctions.map((row) => (
+                        <tr key={row.id}>
+                          <td>{row.token_id}</td>
+                          <td>{shortAddress(row.seller)}</td>
+                          <td>{formatEth(row.min_price_wei)} ETH</td>
+                          <td>{formatEth(row.highest_bid_wei)} ETH</td>
+                          <td>
+                            {row.highest_bidder
+                              ? shortAddress(row.highest_bidder)
+                              : "No bids yet"}
+                          </td>
+                          <td>{row.end_time}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </>
         )}
 
         {activeTab === "loans" && (
