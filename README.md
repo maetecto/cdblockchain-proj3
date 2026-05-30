@@ -155,16 +155,46 @@ npx hardhat test
 
 ---
 
+### Local Network
+
+```bash
+npx hardhat node
+```
+
+Starts a local Ethereum blockchain with pre-funded accounts for testing and development.
+
+---
+
 ## Deployment
 
 ```bash
 npx hardhat run scripts/deploy.js
+npx hardhat run scripts/deploy.js --network localhost
 ```
 
 Seed demo data:
 
 ```bash
 npx hardhat run scripts/seed.js
+npx hardhat run scripts/seed.js --network localhost
+```
+
+---
+
+## Frontend
+
+Run the frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Opens the DApp at:
+
+```text
+http://localhost:5173
 ```
 
 ---

@@ -250,7 +250,31 @@ export default function App() {
 		  contracts.marketRead.pendingETHWithdrawals(wallet),
 		]);
 
-	  setNftSaleFeeBps(saleFee.toString());
+/*
+    console.log("tokenPrice");
+    console.log(
+      await contracts.dexRead.tokenPrice()
+    );
+
+    console.log("reserve");
+    console.log(await contracts.dexRead.getETHReserve());
+
+    console.log("nextId");
+    console.log(await contracts.nftRead.getNextTokenId());
+
+    console.log("cycle");
+    console.log(await contracts.marketRead.paymentCycle());
+
+    console.log("interest");
+    console.log(await contracts.marketRead.dexLoanInterestBps());
+
+    console.log("earlyFee");
+    console.log(await contracts.marketRead.earlyCloseFeeBps());
+
+    console.log("pending");
+    console.log(await contracts.marketRead.pendingETHWithdrawals(wallet));
+*/
+	  setNftSaleFeeBps("500");
       setEthBalance(ethBal.toString());
       setDexBalance(dexBal.toString());
       setTokenPrice(price.toString());
