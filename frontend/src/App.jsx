@@ -4,12 +4,36 @@ import "./App.css";
 import { DEX, NFT, MARKET, DEX_ABI, NFT_ABI, MARKET_ABI } from "./contracts";
 
 const TABS = [
-  { key: "dashboard", label: "Dashboard" },
-  { key: "dex", label: "DEX" },
-  { key: "nfts", label: "NFTs" },
-  { key: "market", label: "Marketplace" },
-  { key: "auctions", label: "Auctions" },
-  { key: "loans", label: "Loans" },
+  {
+    key: "dashboard",
+    label: "Dashboard",
+    description: "Overview of balances, protocol settings and quick project context.",
+  },
+  {
+    key: "dex",
+    label: "DEX",
+    description: "Buy and sell DEX tokens directly against the protocol reserve.",
+  },
+  {
+    key: "nfts",
+    label: "NFTs",
+    description: "Mint, burn and approve NFTs before listing or using them as collateral.",
+  },
+  {
+    key: "market",
+    label: "Marketplace",
+    description: "Create listings, buy NFTs and inspect listing status.",
+  },
+  {
+    key: "auctions",
+    label: "Auctions",
+    description: "Start ETH-based auctions, place bids and monitor active sales.",
+  },
+  {
+    key: "loans",
+    label: "Loans",
+    description: "Borrow, fund, repay and manage DEX-backed or NFT-backed loans.",
+  },
 ];
 
 function shortAddress(address) {
@@ -112,6 +136,11 @@ export default function App() {
   const [repayNftTokenId, setRepayNftTokenId] = useState("");
   const [repayNftEth, setRepayNftEth] = useState("");
   const [claimDefaultTokenId, setClaimDefaultTokenId] = useState("");
+  const currentTab = TABS.find((t) => t.key === activeTab);
+
+	const isConnected = Boolean(wallet);
+	const isWrongNetwork = false; // depois podemos melhorar com chainId real
+	const statusTone = loading ? "loading" : "ready";
 
   const contracts = useMemo(() => {
     if (!provider) return {};
@@ -389,38 +418,51 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="sidebar-footer card subtle">
-          <span className="label">Wallet</span>
-          <strong>{shortAddress(wallet)}</strong>
-          <span className="muted">Market contract</span>
-          <code>{shortAddress(MARKET)}</code>
-        </div>
+		<div className="sidebar-footer card subtle">
+		  <span className="label">Wallet</span>
+		  <strong>{shortAddress(wallet)}</strong>
+		  <span className={`pill ${wallet ? "success-pill" : "warning-pill"}`}>
+			{wallet ? "Connected" : "Not connected"}
+		  </span>
+		  <span className="muted">Market contract</span>
+		  <code>{shortAddress(MARKET)}</code>
+		</div>
       </aside>
 
       <main className="main-panel">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Academic DApp</p>
-            <h2>{TABS.find((t) => t.key === activeTab)?.label}</h2>
-          </div>
+		<header className="topbar">
+		  <div className="topbar-copy">
+			<p className="eyebrow">Academic DApp</p>
+			<h2>{currentTab?.label}</h2>
+			<p className="topbar-description">{currentTab?.description}</p>
 
-          <div className="topbar-actions">
-            <button className="ghost-btn" onClick={toggleTheme}>
-              {theme === "dark" ? "Light mode" : "Dark mode"}
-            </button>
-            <button className="secondary-btn" onClick={refreshData} disabled={!wallet || loading}>
-              Refresh
-            </button>
-            <button className="primary-btn" onClick={connectWallet} disabled={loading}>
-              {wallet ? shortAddress(wallet) : "Connect wallet"}
-            </button>
-          </div>
-        </header>
+			<div className="topbar-meta">
+			  <span className={`pill ${isConnected ? "success-pill" : "warning-pill"}`}>
+				{isConnected ? "Wallet connected" : "Wallet not connected"}
+			  </span>
+			  <span className="pill muted-pill">Hardhat localhost</span>
+			  <span className="pill muted-pill">ERC20 + ERC721</span>
+			</div>
+		  </div>
+
+		  <div className="topbar-actions">
+			<button className="ghost-btn" onClick={toggleTheme}>
+			  {theme === "dark" ? "Light mode" : "Dark mode"}
+			</button>
+			<button className="secondary-btn" onClick={refreshData} disabled={!wallet || loading}>
+			  Refresh
+			</button>
+			<button className="primary-btn" onClick={connectWallet} disabled={loading}>
+			  {wallet ? shortAddress(wallet) : "Connect wallet"}
+			</button>
+		  </div>
+		</header>
 
 		  <section className="stats-grid">
 			<article className="stat-card">
 			  <span className="label">ETH balance</span>
 			  <strong>{formatEth(ethBalance)} ETH</strong>
+			  <small className="stat-foot">Connected wallet balance</small>
 			</article>
 			<article className="stat-card">
 			  <span className="label">DEX balance</span>
@@ -440,10 +482,13 @@ export default function App() {
 			</article>
 		  </section>
 
-        <section className="status-bar">
-          <span className={`status-dot ${loading ? "is-loading" : "is-ready"}`} />
-          <p>{status}</p>
-        </section>
+		<section className={`status-bar ${loading ? "loading" : "ready"}`}>
+		  <span className={`status-dot ${loading ? "is-loading" : "is-ready"}`} />
+		  <div className="status-copy">
+			<strong>{loading ? "Processing action" : "System status"}</strong>
+			<p>{status}</p>
+		  </div>
+		</section>
 
         {activeTab === "dashboard" && (
           <section className="dashboard-grid">
@@ -500,6 +545,24 @@ export default function App() {
                 </div>
               </div>
             </article>
+			
+			<article className="card">
+			  <div className="card-head">
+				<h3>Quick actions</h3>
+				<span className="pill muted-pill">Start here</span>
+			  </div>
+			  <div className="action-stack">
+				<button className="secondary-btn full" onClick={() => setActiveTab("dex")}>
+				  Buy or sell DEX
+				</button>
+				<button className="secondary-btn full" onClick={() => setActiveTab("nfts")}>
+				  Mint and approve NFTs
+				</button>
+				<button className="secondary-btn full" onClick={() => setActiveTab("market")}>
+				  Open marketplace
+				</button>
+			  </div>
+			</article>
 
             <article className="card wide">
               <div className="card-head">
@@ -588,6 +651,9 @@ export default function App() {
               <div className="card-head">
                 <h3>Market metrics</h3>
               </div>
+			  <p className="muted">
+				Live protocol pricing and reserve data for the DEX token running on your local deployment.
+			  </p>
               <div className="info-list compact">
                 <div>
                   <span>Token price</span>
@@ -612,6 +678,9 @@ export default function App() {
               <div className="card-head">
                 <h3>Mint NFT</h3>
               </div>
+			<p className="muted">
+				Mint a new NFT to your wallet using a metadata URI, ready for trading, auctions or collateral flows.
+			</p>
               <div className="field">
                 <label>Metadata URI</label>
                 <input
@@ -635,6 +704,9 @@ export default function App() {
               <div className="card-head">
                 <h3>Burn NFT</h3>
               </div>
+			  <p className="muted">
+				Permanently destroy an NFT you own by submitting its token ID. This action cannot be undone.
+			  </p>
               <div className="field">
                 <label>Token ID</label>
                 <input
@@ -667,6 +739,9 @@ export default function App() {
               <div className="card-head">
                 <h3>Marketplace approval</h3>
               </div>
+			  <p className="muted">
+				Grant the marketplace permission to transfer your NFTs when listing, selling or using them in protocol flows.
+			  </p>
               <p className="muted">Approve the market contract to move your NFTs.</p>
               <div className="approval-box">
                 <span className={`pill ${approveAll ? "success-pill" : "warning-pill"}`}>
@@ -691,7 +766,7 @@ export default function App() {
 
         {activeTab === "market" && (
           <section className="panel-grid">
-            <article className="card">
+            <article className="card wide">
               <div className="card-head">
                 <h3>List NFT</h3>
               </div>
@@ -754,6 +829,9 @@ export default function App() {
               <div className="card-head">
                 <h3>Buy NFT</h3>
               </div>
+			    <p className="muted">
+					Purchase a listed NFT using ETH, or leave the ETH value empty if the listing is priced in DEX.
+				</p>
               <div className="field">
                 <label>Token ID</label>
                 <input
@@ -803,6 +881,9 @@ export default function App() {
               <div className="card-head">
                 <h3>Read listing</h3>
               </div>
+			  <p className="muted">
+				Load the current listing details for a token, including seller, price, payment asset and active status.
+			  </p>
               <div className="field">
                 <label>Token ID</label>
                 <input
@@ -855,6 +936,9 @@ export default function App() {
 					<div className="card-head">
 					  <h3>Start auction</h3>
 					</div>
+					<p className="muted">
+						Start a timed auction for one of your NFTs with a minimum ETH bid and a fixed duration.
+					</p>
 					<div className="form-grid">
 					  <div className="field">
 						<label>Token ID</label>
@@ -915,6 +999,9 @@ export default function App() {
               <div className="card-head">
                 <h3>Bid on auction</h3>
               </div>
+			  <p className="muted">
+				Place a higher ETH bid on an active auction. If you are outbid later, your previous bid can be refunded.
+			  </p>
               <div className="field">
                 <label>Token ID</label>
                 <input
@@ -961,6 +1048,9 @@ export default function App() {
               <div className="card-head">
                 <h3>Read auction</h3>
               </div>
+			  <p className="muted">
+				Inspect the current auction state, including seller, top bid, highest bidder and end time.
+			  </p>
               <div className="field">
                 <label>Token ID</label>
                 <input
@@ -1027,6 +1117,9 @@ export default function App() {
               <div className="card-head">
                 <h3>DEX-backed loan</h3>
               </div>
+			  <p className="muted">
+				Lock DEX as collateral to borrow ETH from the protocol, then repay later to recover your tokens.
+			  </p>
               <div className="field">
                 <label>Collateral DEX</label>
                 <input
@@ -1086,6 +1179,9 @@ export default function App() {
               <div className="card-head">
                 <h3>Request NFT loan</h3>
               </div>
+			  <p className="muted">
+				Use an NFT as collateral to request an ETH loan funded by another user providing DEX backing.
+			  </p>
 				<p className="muted">
 				  For NFT-backed loans, the lender receives half of the interest on repayment.
 				  If the borrower defaults, the lender can claim the NFT collateral.
@@ -1178,6 +1274,9 @@ export default function App() {
               <div className="card-head">
                 <h3>Fund / repay / claim</h3>
               </div>
+			  <p className="muted">
+				Fund an NFT-backed loan, repay an active one, or claim the collateral if the borrower defaults.
+			  </p>
               <div className="field">
                 <label>Fund token ID</label>
                 <input
@@ -1287,11 +1386,13 @@ export default function App() {
                 Claim NFT default
               </button>
             </article>
-			
-			          <article className="card">
-            <div className="card-head">
-              <h3>Withdraw pending ETH</h3>
-            </div>
+			<article className="card">
+				<div className="card-head">
+					<h3>Withdraw pending ETH</h3>
+				</div>
+			<p className="muted">
+				Withdraw ETH accumulated from completed sales, loan repayments, refunds or auction outcomes.
+			</p>
             <p className="muted">
               Any ETH from sales, loans or auctions accumulates as pending balance.
               Withdraw it to your wallet.
