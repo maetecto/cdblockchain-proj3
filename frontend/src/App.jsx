@@ -141,6 +141,15 @@ export default function App() {
 	const isConnected = Boolean(wallet);
 	const isWrongNetwork = false; // depois podemos melhorar com chainId real
 	const statusTone = loading ? "loading" : "ready";
+  const [ownedNfts, setOwnedNfts] = useState([]);
+  const [allNfts, setAllNfts] = useState([]);
+  const [nftsLoading, setNftsLoading] = useState(false);
+  const [activeListings, setActiveListings] = useState([]);
+  const [listingsLoading, setListingsLoading] = useState(false);
+  const [activeAuctions, setActiveAuctions] = useState([]);
+  const [auctionsLoading, setAuctionsLoading] = useState(false);
+  const [nftLoanItems, setNftLoanItems] = useState([]);
+  const [loanItemsLoading, setLoanItemsLoading] = useState(false);
 
   const contracts = useMemo(() => {
     if (!provider) return {};
@@ -206,14 +215,52 @@ export default function App() {
     };
   }, []);
 
- useEffect(() => {
-	async function load() {
-	  if (!provider || !wallet) return;
-	  await refreshData();
-	}
+// Initial on-chain refresh
+useEffect(() => {
+  if (!provider || !wallet) return;
 
-	load();
-  }, [provider, wallet, contracts]);
+  const loadBaseData = async () => {
+    await refreshData();
+  };
+
+  loadBaseData();
+}, [provider, wallet]);
+
+// NFT inventory
+useEffect(() => {
+  if (!contracts.nftRead || !wallet) return;
+
+  const loadOwnedAndAllNfts = async () => {
+    await loadNfts();
+  };
+
+  loadOwnedAndAllNfts();
+}, [contracts.nftRead, wallet, nextTokenId]);
+
+// Marketplace and auction views
+useEffect(() => {
+  if (!contracts.nftRead || !contracts.marketRead) return;
+
+  const loadMarketViews = async () => {
+    await Promise.all([
+      loadActiveListings(),
+      loadActiveAuctions(),
+    ]);
+  };
+
+  loadMarketViews();
+}, [contracts.nftRead, contracts.marketRead, wallet, nextTokenId]);
+
+// Loan views
+useEffect(() => {
+  if (!contracts.nftRead || !contracts.marketRead) return;
+
+  const loadLoanViews = async () => {
+    await loadNftLoans();
+  };
+
+  loadLoanViews();
+}, [contracts.nftRead, contracts.marketRead, wallet, nextTokenId]);
 
   async function connectWallet() {
     try {
@@ -304,23 +351,23 @@ export default function App() {
     console.log(await contracts.marketRead.pendingETHWithdrawals(wallet));
 */
 	  setNftSaleFeeBps("500");
-      setEthBalance(ethBal.toString());
-      setDexBalance(dexBal.toString());
-      setTokenPrice(price.toString());
-      setEthReserve(reserve.toString());
-      setNftCount(nftBal.toString());
-      setNextTokenId(nextId.toString());
-      setPaymentCycle(cycle.toString());
-      setInterestBps(interest.toString());
-      setEarlyFeeBps(earlyFee.toString());
+    setEthBalance(ethBal.toString());
+    setDexBalance(dexBal.toString());
+    setTokenPrice(price.toString());
+    setEthReserve(reserve.toString());
+    setNftCount(nftBal.toString());
+    setNextTokenId(nextId.toString());
+    setPaymentCycle(cycle.toString());
+    setInterestBps(interest.toString());
+    setEarlyFeeBps(earlyFee.toString());
 	  setPendingEth(pending.toString());
+    try {
+      const approved = await contracts.nftRead.isApprovedForAll(wallet, MARKET);
+      setApproveAll(approved);
+    } catch {
+      setApproveAll(false);
+    }
 
-      try {
-        const approved = await contracts.nftRead.isApprovedForAll(wallet, MARKET);
-        setApproveAll(approved);
-      } catch {
-        setApproveAll(false);
-      }
 
       setStatus("On-chain data refreshed.");
     } catch (error) {
@@ -373,6 +420,212 @@ export default function App() {
     }
   }
 
+  async function loadNfts() {
+    try {
+      if (!contracts.nftRead || !wallet) return;
+
+      setNftsLoading(true);
+
+      const nextIdRaw = await contracts.nftRead.getNextTokenId();
+      const nextId = Number(nextIdRaw);
+
+      const all = [];
+      const mine = [];
+
+      for (let tokenId = 0; tokenId < nextId; tokenId++) {
+        try {
+          const owner = await contracts.nftRead.ownerOf(tokenId);
+          const uri = await contracts.nftRead.tokenURI(tokenId);
+
+          const item = {
+            tokenId,
+            owner,
+            uri,
+            isMine: owner.toLowerCase() === wallet.toLowerCase(),
+          };
+
+          all.push(item);
+
+          if (item.isMine) {
+            mine.push(item);
+          }
+        } catch {
+          // token burned or does not exist
+        }
+      }
+
+      setAllNfts(all);
+      setOwnedNfts(mine);
+    } catch (error) {
+      setStatus(error?.shortMessage || error?.message || "Failed to load NFTs.");
+    } finally {
+      setNftsLoading(false);
+    }
+  }
+
+  async function loadActiveListings() {
+    try {
+      if (!contracts.marketRead || !contracts.nftRead) return;
+
+      setListingsLoading(true);
+
+      const nextIdRaw = await contracts.nftRead.getNextTokenId();
+      const nextId = Number(nextIdRaw);
+
+      const items = [];
+
+      for (let tokenId = 0; tokenId < nextId; tokenId++) {
+        try {
+          const listing = await contracts.marketRead.listings(tokenId);
+
+          if (!listing || !listing.active) continue;
+
+          let owner = "";
+          let uri = "";
+
+          try {
+            owner = await contracts.nftRead.ownerOf(tokenId);
+          } catch {
+            owner = listing.seller;
+          }
+
+          try {
+            uri = await contracts.nftRead.tokenURI(tokenId);
+          } catch {
+            uri = "";
+          }
+
+          items.push({
+            tokenId,
+            seller: listing.seller,
+            owner,
+            price: listing.price,
+            inDEX: listing.inDEX,
+            active: listing.active,
+            uri,
+            isMine: wallet && listing.seller.toLowerCase() === wallet.toLowerCase(),
+          });
+        } catch {
+          // ignore missing or invalid listing reads
+        }
+      }
+
+      setActiveListings(items);
+    } catch (error) {
+      setStatus(error?.shortMessage || error?.message || "Failed to load active listings.");
+    } finally {
+      setListingsLoading(false);
+    }
+  }
+
+
+    async function loadActiveAuctions() {
+    try {
+      if (!contracts.marketRead || !contracts.nftRead) return;
+
+      setAuctionsLoading(true);
+
+      const nextIdRaw = await contracts.nftRead.getNextTokenId();
+      const nextId = Number(nextIdRaw);
+
+      const items = [];
+
+      for (let tokenId = 0; tokenId < nextId; tokenId++) {
+        try {
+          const auction = await contracts.marketRead.auctions(tokenId);
+          if (!auction || !auction.active) continue;
+
+          let uri = "";
+          try {
+            uri = await contracts.nftRead.tokenURI(tokenId);
+          } catch {
+            uri = "";
+          }
+
+          items.push({
+            tokenId,
+            seller: auction.seller,
+            minPrice: auction.minPrice,
+            highestBid: auction.highestBid,
+            highestBidder: auction.highestBidder,
+            endTime: auction.endTime,
+            inDEX: auction.inDEX,
+            active: auction.active,
+            uri,
+            isMine: wallet && auction.seller.toLowerCase() === wallet.toLowerCase(),
+          });
+        } catch {
+          // ignore invalid auction entries
+        }
+      }
+
+      setActiveAuctions(items);
+    } catch (error) {
+      setStatus(error?.shortMessage || error?.message || "Failed to load active auctions.");
+    } finally {
+      setAuctionsLoading(false);
+    }
+  }
+
+  async function loadNftLoans() {
+    try {
+      if (!contracts.marketRead || !contracts.nftRead) return;
+
+      setLoanItemsLoading(true);
+
+      const nextIdRaw = await contracts.nftRead.getNextTokenId();
+      const nextId = Number(nextIdRaw);
+
+      const items = [];
+
+      for (let tokenId = 0; tokenId < nextId; tokenId++) {
+        try {
+          const loan = await contracts.marketRead.nftLoans(tokenId);
+
+          if (!loan || !loan.borrower || loan.borrower === ethers.ZeroAddress) continue;
+
+          let uri = "";
+          try {
+            uri = await contracts.nftRead.tokenURI(tokenId);
+          } catch {
+            uri = "";
+          }
+
+          const now = Math.floor(Date.now() / 1000);
+          const dueAt = Number(loan.startTime) + Number(loan.duration);
+          const isDefaultable =
+            Number(loan.startTime) > 0 &&
+            Number(loan.duration) > 0 &&
+            now > dueAt &&
+            loan.active;
+
+          items.push({
+            tokenId,
+            borrower: loan.borrower,
+            lender: loan.lender,
+            requestedETH: loan.requestedETH,
+            interestBps: loan.interestBps,
+            duration: loan.duration,
+            startTime: loan.startTime,
+            dexBacking: loan.dexBacking,
+            active: loan.active,
+            funded: loan.lender && loan.lender !== ethers.ZeroAddress,
+            isDefaultable,
+            uri,
+            isMine: wallet && loan.borrower.toLowerCase() === wallet.toLowerCase(),
+          });
+        } catch {
+          // ignore empty/nonexistent loans
+        }
+      }
+
+      setNftLoanItems(items);
+    } catch (error) {
+      setStatus(error?.shortMessage || error?.message || "Failed to load NFT loans.");
+    } finally {
+      setLoanItemsLoading(false);
+    }
+  }
   async function readAuction() {
     try {
       if (!contracts.marketRead || !lookupAuctionTokenId) {
@@ -739,9 +992,9 @@ export default function App() {
               <div className="card-head">
                 <h3>Marketplace approval</h3>
               </div>
-			  <p className="muted">
-				Grant the marketplace permission to transfer your NFTs when listing, selling or using them in protocol flows.
-			  </p>
+              <p className="muted">
+              Grant the marketplace permission to transfer your NFTs when listing, selling or using them in protocol flows.
+              </p>
               <p className="muted">Approve the market contract to move your NFTs.</p>
               <div className="approval-box">
                 <span className={`pill ${approveAll ? "success-pill" : "warning-pill"}`}>
@@ -760,6 +1013,81 @@ export default function App() {
               >
                 Approve market
               </button>
+            </article>
+            <article className="card wide">
+              <div className="card-head">
+                <h3>Your NFT collection</h3>
+                <span className="pill muted-pill">
+                  {nftsLoading ? "Loading..." : `${ownedNfts.length} owned`}
+                </span>
+              </div>
+              <p className="muted">
+                NFTs currently owned by the connected wallet and available for listing, auction or loan flows.
+              </p>
+
+              {nftsLoading ? (
+                <p className="muted">Loading NFTs...</p>
+              ) : ownedNfts.length === 0 ? (
+                <p className="muted">No NFTs found in this wallet yet.</p>
+              ) : (
+                <div className="nft-grid">
+                  {ownedNfts.map((nft) => (
+                    <div key={nft.tokenId} className="nft-item">
+                      <div className="nft-item-head">
+                        <span className="pill">Token #{nft.tokenId}</span>
+                      </div>
+                      <div className="info-list compact">
+                        <div>
+                          <span>Owner</span>
+                          <strong>{shortAddress(nft.owner)}</strong>
+                        </div>
+                        <div>
+                          <span>Metadata</span>
+                          <strong>{nft.uri}</strong>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+            <article className="card wide">
+              <div className="card-head">
+                <h3>All minted NFTs</h3>
+                <span className="pill muted-pill">
+                  {nftsLoading ? "Loading..." : `${allNfts.length} total`}
+                </span>
+              </div>
+              <p className="muted">
+                Existing NFTs detected from the contract by scanning minted token IDs.
+              </p>
+
+              {nftsLoading ? (
+                <p className="muted">Loading collection...</p>
+              ) : allNfts.length === 0 ? (
+                <p className="muted">No NFTs have been minted yet.</p>
+              ) : (
+                <div className="nft-grid">
+                  {allNfts.map((nft) => (
+                    <div key={nft.tokenId} className="nft-item">
+                      <div className="nft-item-head">
+                        <span className="pill">Token #{nft.tokenId}</span>
+                        {nft.isMine && <span className="pill success-pill">Owned by you</span>}
+                      </div>
+                      <div className="info-list compact">
+                        <div>
+                          <span>Owner</span>
+                          <strong>{shortAddress(nft.owner)}</strong>
+                        </div>
+                        <div>
+                          <span>Metadata</span>
+                          <strong>{nft.uri}</strong>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </article>
           </section>
         )}
@@ -927,6 +1255,73 @@ export default function App() {
                 </div>
               )}
             </article>
+            <article className="card wide">
+              <div className="card-head">
+                <h3>Live marketplace listings</h3>
+                <span className="pill muted-pill">
+                  {listingsLoading ? "Loading..." : `${activeListings.length} active`}
+                </span>
+              </div>
+              <p className="muted">
+                NFTs currently listed for sale in the marketplace, including seller, payment asset and asking price.
+              </p>
+
+              {listingsLoading ? (
+                <p className="muted">Loading active listings...</p>
+              ) : activeListings.length === 0 ? (
+                <p className="muted">No NFTs are currently listed for sale.</p>
+              ) : (
+                <div className="nft-grid">
+                  {activeListings.map((item) => (
+                    <div key={item.tokenId} className="nft-item">
+                      <div className="nft-item-head">
+                        <span className="pill">Token #{item.tokenId}</span>
+                        {item.isMine && <span className="pill success-pill">Your listing</span>}
+                      </div>
+
+                      <div className="info-list compact">
+                        <div>
+                          <span>Seller</span>
+                          <strong>{shortAddress(item.seller)}</strong>
+                        </div>
+                        <div>
+                          <span>Price</span>
+                          <strong>
+                            {item.inDEX
+                              ? `${formatDex(item.price)} DEX`
+                              : `${formatEth(item.price)} ETH`}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Payment asset</span>
+                          <strong>{item.inDEX ? "DEX" : "ETH"}</strong>
+                        </div>
+                        <div>
+                          <span>Metadata</span>
+                          <strong>{item.uri || "No metadata"}</strong>
+                        </div>
+                      </div>
+
+                      <button
+                        className="primary-btn full top-gap"
+                        disabled={!contracts.marketWrite || loading}
+                        onClick={() => {
+                          setBuyTokenId(String(item.tokenId));
+                          if (!item.inDEX) {
+                            setBuyValue(formatEth(item.price));
+                          } else {
+                            setBuyValue("");
+                          }
+                          setStatus(`Listing #${item.tokenId} selected for purchase.`);
+                        }}
+                      >
+                        Use this listing
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
           </section>
         )}
 
@@ -999,9 +1394,9 @@ export default function App() {
               <div className="card-head">
                 <h3>Bid on auction</h3>
               </div>
-			  <p className="muted">
-				Place a higher ETH bid on an active auction. If you are outbid later, your previous bid can be refunded.
-			  </p>
+                <p className="muted">
+                Place a higher ETH bid on an active auction. If you are outbid later, your previous bid can be refunded.
+                </p>
               <div className="field">
                 <label>Token ID</label>
                 <input
@@ -1048,9 +1443,9 @@ export default function App() {
               <div className="card-head">
                 <h3>Read auction</h3>
               </div>
-			  <p className="muted">
-				Inspect the current auction state, including seller, top bid, highest bidder and end time.
-			  </p>
+                <p className="muted">
+                Inspect the current auction state, including seller, top bid, highest bidder and end time.
+                </p>
               <div className="field">
                 <label>Token ID</label>
                 <input
@@ -1107,6 +1502,76 @@ export default function App() {
 				</div>
 			  </div>
 			)}
+            </article>
+            <article className="card wide">
+              <div className="card-head">
+                <h3>Live auctions</h3>
+                <span className="pill muted-pill">
+                  {auctionsLoading ? "Loading..." : `${activeAuctions.length} active`}
+                </span>
+              </div>
+              <p className="muted">
+                NFTs currently in auction, including minimum price, highest bid and auction deadline.
+              </p>
+
+              {auctionsLoading ? (
+                <p className="muted">Loading active auctions...</p>
+              ) : activeAuctions.length === 0 ? (
+                <p className="muted">No active auctions found.</p>
+              ) : (
+                <div className="nft-grid">
+                  {activeAuctions.map((item) => (
+                    <div key={item.tokenId} className="nft-item">
+                      <div className="nft-item-head">
+                        <span className="pill">Token #{item.tokenId}</span>
+                        {item.isMine && <span className="pill success-pill">Your auction</span>}
+                      </div>
+
+                      <div className="info-list compact">
+                        <div>
+                          <span>Seller</span>
+                          <strong>{shortAddress(item.seller)}</strong>
+                        </div>
+                        <div>
+                          <span>Min price</span>
+                          <strong>{formatEth(item.minPrice)} ETH</strong>
+                        </div>
+                        <div>
+                          <span>Highest bid</span>
+                          <strong>{formatEth(item.highestBid)} ETH</strong>
+                        </div>
+                        <div>
+                          <span>Highest bidder</span>
+                          <strong>
+                            {item.highestBidder && item.highestBidder !== ethers.ZeroAddress
+                              ? shortAddress(item.highestBidder)
+                              : "No bids yet"}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Ends at</span>
+                          <strong>{new Date(Number(item.endTime) * 1000).toLocaleString()}</strong>
+                        </div>
+                        <div>
+                          <span>Metadata</span>
+                          <strong>{item.uri || "No metadata"}</strong>
+                        </div>
+                      </div>
+
+                      <button
+                        className="primary-btn full top-gap"
+                        disabled={!contracts.marketWrite || loading}
+                        onClick={() => {
+                          setBidTokenId(String(item.tokenId));
+                          setStatus(`Auction #${item.tokenId} selected for bidding.`);
+                        }}
+                      >
+                        Use this auction
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </article>
           </section>
         )}
@@ -1179,13 +1644,13 @@ export default function App() {
               <div className="card-head">
                 <h3>Request NFT loan</h3>
               </div>
-			  <p className="muted">
-				Use an NFT as collateral to request an ETH loan funded by another user providing DEX backing.
-			  </p>
-				<p className="muted">
-				  For NFT-backed loans, the lender receives half of the interest on repayment.
-				  If the borrower defaults, the lender can claim the NFT collateral.
-				</p>
+                <p className="muted">
+                Use an NFT as collateral to request an ETH loan funded by another user providing DEX backing.
+                </p>
+                <p className="muted">
+                  For NFT-backed loans, the lender receives half of the interest on repayment.
+                  If the borrower defaults, the lender can claim the NFT collateral.
+                </p>
               <div className="form-grid">
                 <div className="field">
                   <label>Token ID</label>
@@ -1413,6 +1878,92 @@ export default function App() {
             >
               Withdraw ETH
             </button>
+          </article>
+          <article className="card wide">
+            <div className="card-head">
+              <h3>NFT loan requests</h3>
+              <span className="pill muted-pill">
+                {loanItemsLoading ? "Loading..." : `${nftLoanItems.length} found`}
+              </span>
+            </div>
+            <p className="muted">
+              NFT-backed loan requests detected on-chain, including funding and repayment status.
+            </p>
+
+            {loanItemsLoading ? (
+              <p className="muted">Loading NFT-backed loans...</p>
+            ) : nftLoanItems.length === 0 ? (
+              <p className="muted">No NFT loan requests found.</p>
+            ) : (
+              <div className="nft-grid">
+                {nftLoanItems.map((item) => (
+                  <div key={item.tokenId} className="nft-item">
+                    <div className="nft-item-head">
+                      <span className="pill">Token #{item.tokenId}</span>
+                      {item.isMine && <span className="pill success-pill">Your loan</span>}
+                      {item.isDefaultable && <span className="pill warning-pill">Defaultable</span>}
+                    </div>
+
+                    <div className="info-list compact">
+                      <div>
+                        <span>Borrower</span>
+                        <strong>{shortAddress(item.borrower)}</strong>
+                      </div>
+                      <div>
+                        <span>Lender</span>
+                        <strong>
+                          {item.funded ? shortAddress(item.lender) : "Awaiting funding"}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>Requested ETH</span>
+                        <strong>{formatEth(item.requestedETH)} ETH</strong>
+                      </div>
+                      <div>
+                        <span>DEX backing</span>
+                        <strong>{formatDex(item.dexBacking)} DEX</strong>
+                      </div>
+                      <div>
+                        <span>Interest</span>
+                        <strong>{item.interestBps} bps</strong>
+                      </div>
+                      <div>
+                        <span>Duration</span>
+                        <strong>{item.duration.toString()} sec</strong>
+                      </div>
+                      <div>
+                        <span>Metadata</span>
+                        <strong>{item.uri || "No metadata"}</strong>
+                      </div>
+                    </div>
+
+                    {!item.funded ? (
+                      <button
+                        className="secondary-btn full top-gap"
+                        disabled={loading}
+                        onClick={() => {
+                          setFundTokenId(String(item.tokenId));
+                          setStatus(`Loan request #${item.tokenId} selected for funding.`);
+                        }}
+                      >
+                        Use for funding
+                      </button>
+                    ) : (
+                      <button
+                        className="secondary-btn full top-gap"
+                        disabled={loading}
+                        onClick={() => {
+                          setRepayNftTokenId(String(item.tokenId));
+                          setStatus(`Loan #${item.tokenId} selected for repayment.`);
+                        }}
+                      >
+                        Use for repayment
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </article>
           </section>
         )}
